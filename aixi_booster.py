@@ -1140,7 +1140,7 @@ class symbolic_regression(object):
         #xgbl
         self.postprocessing_prod='auto'
         #self.postprocessing_learn='lin'
-        self.postprocessing_learn='xgbl'
+        self.postprocessing_learn='lin'
     def fit(self,X,Y,episodes,popsize=450,maxiter=1000,mutation_p=0.1,mutation_p_e=0.1,
             mutation_r=1,alpha_count=28,elitarism=12,n_jobs=8,seed=0,verbose=True,start_point=[]):
         self.X_size=X.shape[1]
