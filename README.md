@@ -11,7 +11,7 @@ The fitness function looks like this:
 6) Than we concat X_train strings and y_pred_turing strings - this is named "linear input"
 7) Than we make an ML-model that has a linear input as it's input and Y_train as output. ML-model may be Ridge or boosting.
 8) Than we interpetate a model output as Y_predicted_normed
-9) fitness = MSE(Y_train_normed, Y_predicted_normed) - penalty_for_complexity
+9) fitness = - MSE(Y_train_normed, Y_predicted_normed) - penalty_for_complexity
 10) penalty_for_complexity = regularization_coefficient*count_non_empty_strings_in_Brainfuck_code/maximum_count_strings_available_in_Brainfuck_code
 
 Than we make boosting of such models. And a weighted forest of boostings.
