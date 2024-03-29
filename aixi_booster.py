@@ -258,7 +258,6 @@ def challenge_supervised(l):
     #steps_per_x = 50 #надо побольше, так как у нас тут язык не очень эффективный
     err_arr = []
     Y_pred = []
-    
     sym = symbolic_regression(tact_count=steps_per_x,memory_size=size_mem,zero_dup=1,
                               size_genom=20,regularization=regularization,pl=pl)
     sym.genom=code
@@ -290,11 +289,11 @@ def challenge_supervised(l):
     except Exception as e:
         print('AAAAAAAAAAAAAAa',str(e))
         return np.inf
-    
     Y_pred_lm = lm.predict(linear_input)
     Y_pred_lm_normed = Y_pred_lm/(np.abs(Y[episodes_to_list(episodes),:]).mean(axis=0)+1e-20)
     Y_normed = Y[episodes_to_list(episodes),:]/(np.abs(Y[episodes_to_list(episodes),:]).mean(axis=0)+1e-20)
     err = (Y_pred_lm_normed - Y_normed)**2
+    data_len = err.shape[0]
     mse = np.mean(err)
     #sse=np.sum(err)
     #сумма от квадратов ошибок плюс длина кода на регуляризационный коэффициент
@@ -304,8 +303,12 @@ def challenge_supervised(l):
     count_code_blocks=np.sum(code>=0)
     mean_code_blocks=count_code_blocks/code_len
     if measure:
-        print('challenge_time',pd.Timestamp.now() - nw,flush=True)
-    return(mse/np.mean(Y_normed**2)  + regularization*mean_code_blocks )
+        print('challenge_time',pd.Timestamp.now() - nw,flush=True)  
+    #2 компоненты: 
+    #mse/np.mean(Y_normed**2) - log(P(модель|данные)), считаем, что модель прогнозирует матожидание, а результат должен быть распределён по Гауссу
+    #mean_code_blocks/data_len - вклад от априорной вероятности модели
+    loss = mse/np.mean(Y_normed**2)  + regularization * mean_code_blocks/data_len
+    return loss
 #+ regularization*np.sum(code>=0)
 
 class automat:
@@ -383,7 +386,7 @@ class automat:
 
             elif cmd==21:
                 #execute
-                if self.buf1!=20:
+                if not (self.buf1 in [20, 21]):
                     self.exe(self.buf1)
                     if self.verbose:
                         print(f'exec ')
@@ -1025,7 +1028,7 @@ cmd_names ={
 }
 
 def evol_parallel(function,pl=None,bounds=[0,1],size_x=10,popsize=20,maxiter=10,mutation_p=0.1,mutation_p_e=0.01,
-                  mutation_r=0.1,alpha_count=3,elitarism=2,n_jobs=2,seed=1,verbose=True,
+                  mutation_r=0.1,alpha_count=3,elitarism=2,n_jobs=1,seed=1,verbose=True,
                   out=[],episodes=None,X=None,Y=None,regularization=0.15,steps=30,size_mem=200,
                   start_point=[],get_extended=False,elementary_command_count=40):
     #steps - число тактов на один прогноз
@@ -1048,7 +1051,7 @@ def evol_parallel(function,pl=None,bounds=[0,1],size_x=10,popsize=20,maxiter=10,
         p_arr[0] = np.abs(bounds[0])/(bounds[1]-bounds[0])
         print('p_arr max,min,med,q0.25,q0.75',np.max(p_arr),np.min(p_arr),np.median(p_arr),
               np.percentile(p_arr,25),np.percentile(p_arr,75))
-        print(p_arr)
+        #print(p_arr)
         x_old_old = [np.random.random(size=size_x)*(bounds[1]-bounds[0]) + bounds[0] for i in range(int(popsize/(edge-1)))]
         x_old=[np.array([float(np.argmax(np.random.rand(len(p_arr))*p_arr)) for i in range(size_x)]) for j in range(popsize-int(popsize/(edge-1))) ]
         x_old.extend(x_old_old)
@@ -1062,26 +1065,31 @@ def evol_parallel(function,pl=None,bounds=[0,1],size_x=10,popsize=20,maxiter=10,
         x_old[:ln]=start_point
    
     for t in range(maxiter):
-        pool = Pool(processes=n_jobs)
-        if X is None:
-            l_out = pool.map(function, [x for x in x_old])
+        #if n_jobs == 1:
+        if 0:
+            if X is None:
+                l_out = [function(x) for x in x_old]
+            else:
+                l_out = [[function([x,episodes,X,Y,steps,regularization,size_mem,pl])] for x in x_old]
         else:
-            l_out = pool.map(function, [[x,episodes,X,Y,steps,regularization,size_mem,pl] for x in x_old])
-        pool.close()
-        pool.join()
+            pool = Pool(processes=n_jobs)
+            if X is None:
+                l_out = pool.map(function, [x for x in x_old])
+            else:
+                l_out = pool.map(function, [[x,episodes,X,Y,steps,regularization,size_mem,pl] for x in x_old])
+            pool.close()
+            pool.join()   
         y_old = np.array(l_out)
+        del l_out
        
         #отобрать альфачей
         alpha_nums = y_old.argsort()[:alpha_count]
-
            
         if verbose:
             print(f'iteration {t} y=',y_old[alpha_nums[:elitarism]])
-       
         x_new = []
         for elit in range(elitarism):
             x_new.append(x_old[alpha_nums[elit]].copy())
-       
         for child in range(popsize - elitarism):
             #скрещиваем
             crossed_alphas = alpha_nums[[np.random.randint(low=0,high=alpha_count),np.random.randint(low=0,high=alpha_count)]]
@@ -1094,20 +1102,23 @@ def evol_parallel(function,pl=None,bounds=[0,1],size_x=10,popsize=20,maxiter=10,
             x_c[x_c>bounds[1]]=bounds[1]
             x_c[x_c<bounds[0]]=bounds[0]
             x_new.append(x_c.copy())
-       
         x_old = x_new
         if len(out)>0:
             out[0] = x_old.copy()
-        
         mutation_p = mutation_p*(1-mutation_p_e)
-       
-    pool = Pool(processes=n_jobs)
-    if X is None:
-        l_out = pool.map(function, [x for x in x_old])
+    if 0:#n_jobs == 1:
+        if X is None:
+            l_out = [function(x) for x in x_old]
+        else:
+            l_out = [[function([x,episodes,X,Y,steps,regularization,size_mem,pl])] for x in x_old]
     else:
-        l_out = pool.map(function, [[x,episodes,X,Y,steps,regularization,size_mem,pl] for x in x_old])
-    pool.close()
-    pool.join()
+        pool = Pool(processes=n_jobs)
+        if X is None:
+            l_out = pool.map(function, [x for x in x_old])
+        else:
+            l_out = pool.map(function, [[x,episodes,X,Y,steps,regularization,size_mem,pl] for x in x_old])
+        pool.close()
+        pool.join()
     y_old = np.array(l_out)
     alpha_nums = y_old.argsort()[:alpha_count]
     if verbose:
@@ -1122,7 +1133,7 @@ def evol_parallel(function,pl=None,bounds=[0,1],size_x=10,popsize=20,maxiter=10,
     
     
 class symbolic_regression(object):
-    def __init__(self,pl,memory_size=200,tact_count=10, zero_dup=2, size_genom=100,regularization=0.15,out=[1]):
+    def __init__(self,pl,memory_size=200,tact_count=10, zero_dup=2, size_genom=100,regularization=0.15,out=[1], postprocessing_prod='auto', postprocessing_learn='lin'):
         #memory_size - размер внутренней памяти в единичной машине Тьюринга
         #tact_count - число тактов на прогноз очередного значения
         #zero_dup - во сколько раз нулей больше, чем не-нулей
@@ -1138,9 +1149,8 @@ class symbolic_regression(object):
         self.Y_size=0
         self.pl=pl
         #xgbl
-        self.postprocessing_prod='auto'
-        #self.postprocessing_learn='lin'
-        self.postprocessing_learn='lin'
+        self.postprocessing_prod = postprocessing_prod
+        self.postprocessing_learn = postprocessing_learn
     def fit(self,X,Y,episodes,popsize=450,maxiter=1000,mutation_p=0.1,mutation_p_e=0.1,
             mutation_r=1,alpha_count=28,elitarism=12,n_jobs=8,seed=0,verbose=True,start_point=[]):
         self.X_size=X.shape[1]
@@ -1149,7 +1159,7 @@ class symbolic_regression(object):
         #mutation_p_e - это штука, уменьшающая вероятность мутации. mutation_p_e=0.2 - уменьшаем каждый раз на 20%
         pl=pattern_lib()
         self.elementary_command_count=pl.standard_commands_count
-        [self.genom,self.genom_list,self.profit_array] = evol_parallel(function=challenge_supervised,pl=pl,bounds=
+        [self.genom,self.genom_list,self.profit_array] = evol_parallel(function=challenge_supervised, pl=pl, bounds=
                                                                        [int(-self.elementary_command_count*(self.zero_dup)),
                                                                         self.elementary_command_count],
                                                                        size_x=self.size_genom,
@@ -1301,7 +1311,7 @@ class symbolic_regression(object):
         return Y_pred_lm
     
 class symbolic_regression_boosting(object):
-    def __init__(self,memory_size=200,tact_count=10, zero_dup=2, size_genom=100,regularization=0.05):
+    def __init__(self,memory_size=200,tact_count=10, zero_dup=2, size_genom=100,regularization=0.05, postprocessing_prod='auto', postprocessing_learn='lin'):
         #memory_size - размер внутренней памяти в единичной машине Тьюринга
         #tact_count - число тактов на прогноз очередного значения
         #zero_dup - во сколько раз нулей больше, чем не-нулей
@@ -1312,6 +1322,7 @@ class symbolic_regression_boosting(object):
         self.size_genom = size_genom
         self.out = [1]
         self.regularization = regularization
+        self.postprocessing_prod, self.postprocessing_learn = postprocessing_prod, postprocessing_learn
     def fit(self,X,Y,episodes,boosting_count=5,boosting_eta=0.2,popsize=450,maxiter=1000,mutation_p=0.1,
             mutation_p_e=0.1,mutation_r=1,alpha_count=28,elitarism=12,n_jobs=8,seed=0,t_index=None,verbose=True):
         self.X_size=X.shape[1]
@@ -1330,8 +1341,8 @@ class symbolic_regression_boosting(object):
         pl = pattern_lib()
         while 1:
             sym = symbolic_regression(pl=pl,tact_count=self.tact_count,zero_dup=self.zero_dup,size_genom=self.size_genom,
-                                      regularization=self.regularization)
-            sym.fit(X,Y,episodes,maxiter=maxiter,popsize=popsize,mutation_p=mutation_p,mutation_r=mutation_r,seed=i)
+                                      regularization=self.regularization, postprocessing_prod=self.postprocessing_prod, postprocessing_learn=self.postprocessing_learn)
+            sym.fit(X,Y,episodes,maxiter=maxiter,popsize=popsize,mutation_p=mutation_p,mutation_r=mutation_r,seed=i, n_jobs=n_jobs)
             score = challenge_supervised([sym.genom,episodes,X,Y,self.tact_count,self.regularization,self.memory_size,pl])
             if score<1 or i>=4:
                 if verbose:
@@ -1396,7 +1407,7 @@ class symbolic_regression_boosting(object):
     
 
 class symbolic_regression_multyboosting(object):
-    def __init__(self,memory_size=200,tact_count=10, zero_dup=2, size_genom=100,regularization=0.15,disco=1):
+    def __init__(self,memory_size=200,tact_count=10, zero_dup=2, size_genom=100,regularization=0.15,disco=1, postprocessing_prod='auto', postprocessing_learn='lin'):
         #memory_size - размер внутренней памяти в единичной машине Тьюринга
         #tact_count - число тактов на прогноз очередного значения
         #zero_dup - во сколько раз нулей больше, чем не-нулей
@@ -1408,6 +1419,7 @@ class symbolic_regression_multyboosting(object):
         self.out = [1]
         self.regularization = regularization #штраф за сложность модели
         self.disco=disco #затухание функции ошибки с ростом расстояния от начала прогноза
+        self.postprocessing_prod, self.postprocessing_learn = postprocessing_prod, postprocessing_learn
     def fit(self,X,Y,episodes,forest_count=3,sample_part=0.5,boosting_count=5,boosting_eta=0.2,
             popsize=450,maxiter=1000,mutation_p=0.1,mutation_p_e=0.1,mutation_r=1,alpha_count=28,elitarism=12,
             n_jobs=8,seed=0,verbose=True, t_index=None):
@@ -1429,7 +1441,9 @@ class symbolic_regression_multyboosting(object):
             episodes_current=np.array(episodes)[lst_ind]
             print(f'FOREST NUMBER {i}, episodes',episodes_current)
             sym=symbolic_regression_boosting(tact_count=self.tact_count,zero_dup=self.zero_dup,
-                                             size_genom=self.size_genom,regularization=self.regularization)
+                                             size_genom=self.size_genom,regularization=self.regularization,
+                                             postprocessing_prod=self.postprocessing_prod, 
+                                             postprocessing_learn=self.postprocessing_learn)
             if histogram_input==False:
                 sym.fit(X=X,Y=Y,episodes=episodes_current,boosting_count=boosting_count,boosting_eta=boosting_eta,popsize=popsize,
                         maxiter=maxiter,mutation_p=mutation_p,mutation_p_e=mutation_p_e,mutation_r=mutation_r,
@@ -1458,7 +1472,8 @@ class symbolic_regression_multyboosting(object):
             for j in range(err_augmented.shape[1]):
                 err_augmented[:,j]=err_augmented[:,j]*weight_line
             
-            err_sum = 0.01*np.sum(err)/err.shape[1]
+            #err_sum = 0.01*np.sum(err)/err.shape[1]
+            err_sum = np.sum(err)
             complexity = sum([len(sym.boosting[j].genom[sym.boosting[j].genom>0]) for j in range(len(sym.boosting))])
             print('err_sum,complexity',err_sum,complexity)
             sym.log_likelyhood=err_sum+complexity
